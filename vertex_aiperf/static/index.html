@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GEAP AIPerf Runner</title>
+    <meta
+      name="description"
+      content="GEAP AIPerf Runner — Run NVIDIA AIPerf LLM performance benchmarks against Google Cloud Vertex AI Endpoints authenticated with your Google Account (OAuth 2.0)."
+    />
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="app-header">
+        <div class="header-brand">
+          <div class="brand-mark" aria-hidden="true">
+            <svg
+              class="brand-rocket-icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z" />
+              <path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z" />
+              <path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0" />
+              <path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" />
+            </svg>
+          </div>
+          <div class="brand-copy">
+            <h1>GEAP AIPerf Runner</h1>
+            <p class="app-subtitle">
+              Benchmarks your GEAP deployed models with AIPerf
+            </p>
+          </div>
+        </div>
+
+        <!-- Top-Right Google Account Authentication -->
+        <div class="header-auth" aria-label="Google Account Authentication">
+          <div class="header-auth-buttons">
+            <button type="button" class="btn btn-google" id="google-signin-btn">
+              <svg class="google-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path fill="#4285F4" d="M23.49 12.27c0-.79-.07-1.54-.19-2.27H12v4.51h6.47c-.29 1.48-1.14 2.73-2.4 3.58v2.98h3.86c2.26-2.09 3.56-5.17 3.56-8.8z"/>
+                <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.86-2.98c-1.08.72-2.45 1.16-4.07 1.16-3.13 0-5.78-2.11-6.73-4.96H1.29v3.09C3.26 21.3 7.31 24 12 24z"/>
+                <path fill="#FBBC05" d="M5.27 14.31c-.24-.72-.38-1.49-.38-2.31s.14-1.59.38-2.31V6.6H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.4l3.98-3.09z"/>
+                <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.6l3.98 3.09c.95-2.85 3.6-4.94 6.73-4.94z"/>
+              </svg>
+              <span id="google-signin-label">Sign in with Google</span>
+            </button>
+
+            <div class="verify-token-stack">
+              <button
+                type="button"
+                class="btn btn-verify token-invalid"
+                id="verify-token-btn"
+                title="Verify your active Google OAuth2 token against Google"
+              >
+                <span class="verify-dot" id="verify-status-dot" aria-hidden="true"></span>
+                <span id="verify-token-label">Verify Token</span>
+              </button>
+              <span id="token-validity-caption" class="token-validity-caption invalid">
+                Not signed in
+              </span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <!-- Multi-Tab Workspace: Tab 1 = Configuration, Tab 2 = AIPerf Output -->
+        <section class="tabs-container" aria-label="Benchmark Workspace">
+          <div class="tabs-header">
+            <div class="tabs-bar" role="tablist" aria-label="Workspace Views">
+              <button
+                type="button"
+                role="tab"
+                id="tab-btn-config"
+                class="tab-btn active"
+                aria-selected="true"
+                aria-controls="tab-panel-config"
+                tabindex="0"
+              >
+                <svg class="tab-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h12M4 10h12M4 14h8" />
+                </svg>
+                <span>Configuration</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                id="tab-btn-output"
+                class="tab-btn"
+                aria-selected="false"
+                aria-controls="tab-panel-output"
+                tabindex="-1"
+              >
+                <svg class="tab-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 7l3 3-3 3m5 0h5M3.5 4.5h13a1 1 0 011 1v9a1 1 0 01-1 1h-13a1 1 0 01-1-1v-9a1 1 0 011-1z" />
+                </svg>
+                <span>AIPerf Output</span>
+                <span id="run-status-badge" class="status-badge idle">Idle</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Tab 1: Configuration -->
+          <div
+            id="tab-panel-config"
+            role="tabpanel"
+            aria-labelledby="tab-btn-config"
+            class="tab-panel panel-body"
+          >
+            <!-- AIPerf CLI Command -->
+            <div class="field-group">
+              <div class="field-header">
+                <label class="field-label" for="aiperf-cmd-input">
+                  <span class="step-num">1</span>
+                  AIPerf CLI Command
+                </label>
+                <div>
+                  <button type="button" class="btn btn-ghost" id="load-example-btn">
+                    Load Vertex AI Example
+                  </button>
+                  <button type="button" class="btn btn-ghost" id="clear-cmd-btn">
+                    Clear
+                  </button>
+                </div>
+              </div>
+              <p class="field-hint">
+                Paste your full <code>aiperf profile ...</code> command targeting a Vertex AI endpoint URL. Multi-line commands with <code>\</code> are supported.
+              </p>
+              <textarea
+                id="aiperf-cmd-input"
+                class="mono-textarea"
+                rows="15"
+                spellcheck="false"
+                placeholder='aiperf profile --model Qwen/Qwen3.5-9B --use-server-token-count --url "https://<endpoint-id>.<region>-<project-num>.prediction.vertexai.goog/v1/projects/<project-num>/locations/<region>/endpoints/<endpoint-id>/invoke/v1/chat/completions" --endpoint-type chat --concurrency 5 --streaming'
+              ></textarea>
+
+              <div id="cmd-validation-bar" class="validation-bar neutral">
+                Enter an <code>aiperf</code> CLI command to validate arguments and inspect endpoint metadata.
+              </div>
+              <div id="cmd-meta-tags" class="meta-tags hidden"></div>
+              <ul id="cmd-notes-list" class="notes-list hidden"></ul>
+            </div>
+
+            <!-- Optional Run Name & HuggingFace Token -->
+            <div class="options-grid">
+              <div class="field-group">
+                <div class="field-header">
+                  <label class="field-label" for="run-name-input">
+                    <span class="step-num">2</span>
+                    Run Name (Optional)
+                  </label>
+                </div>
+                <p class="field-hint">
+                  Used to label the run and name the downloaded <code>.zip</code> archive of generated artifacts.
+                </p>
+                <input
+                  type="text"
+                  id="run-name-input"
+                  class="mono-input"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="e.g. qwen3.5-9b-c5-100conv"
+                />
+              </div>
+
+              <div class="field-group">
+                <div class="field-header">
+                  <label class="field-label" for="hf-token-input">
+                    <span class="step-num">3</span>
+                    HuggingFace Token (Optional)
+                  </label>
+                </div>
+                <p class="field-hint">
+                  Exported as <code>HF_TOKEN</code> before running <code>aiperf</code> (for gated tokenizers or public datasets).
+                </p>
+                <div class="input-row">
+                  <input
+                    type="password"
+                    id="hf-token-input"
+                    class="mono-input"
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder="hf_..."
+                  />
+                  <button
+                    type="button"
+                    class="btn btn-secondary"
+                    id="toggle-hf-token-btn"
+                    aria-label="Toggle HuggingFace token visibility"
+                  >
+                    Show
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Execution Controls -->
+            <div class="controls-footer">
+              <div class="auth-mode-group" role="radiogroup" aria-label="Credential transport mode">
+                <span>Auth transport:</span>
+                <label class="radio-option" title="Mints an OAuth2 token from your Google Account and injects it directly into AIPerf memory with zero proxy hop overhead.">
+                  <input type="radio" name="auth-mode" id="auth-mode-direct" value="direct" checked />
+                  Direct Bearer (0-hop, &lt;55m runs)
+                </label>
+                <label class="radio-option" title="Routes requests through a local 127.0.0.1 streaming proxy that automatically refreshes your Google OAuth2 token before expiry.">
+                  <input type="radio" name="auth-mode" id="auth-mode-proxy" value="proxy" />
+                  Auto-Refresh Proxy (&gt;55m runs)
+                </label>
+              </div>
+
+              <div class="action-buttons">
+                <button type="button" class="btn btn-secondary" id="copy-cli-btn" title="Copy equivalent terminal command">
+                  Copy CLI Equivalent
+                </button>
+                <button type="button" class="btn btn-danger hidden" id="stop-run-btn">
+                  Stop Run
+                </button>
+                <button type="button" class="btn btn-primary" id="start-run-btn">
+                  Run AIPerf Benchmark
+                </button>
+              </div>
+            </div>
+
+            <div id="run-error-banner" class="alert-banner hidden" role="alert"></div>
+          </div>
+
+          <!-- Tab 2: AIPerf Command Output -->
+          <div
+            id="tab-panel-output"
+            role="tabpanel"
+            aria-labelledby="tab-btn-output"
+            class="tab-panel terminal-tab-body hidden"
+            hidden
+          >
+            <div class="terminal-header">
+              <div class="terminal-status-group">
+                <span id="run-id-label">No benchmark run started yet</span>
+                <span id="run-elapsed-label"></span>
+              </div>
+              <div class="terminal-actions">
+                <button type="button" class="terminal-btn terminal-btn-danger hidden" id="stop-run-output-btn">
+                  Stop Run
+                </button>
+                <label class="autoscroll-label">
+                  <input type="checkbox" id="autoscroll-toggle" checked />
+                  Auto-scroll
+                </label>
+                <button type="button" class="terminal-btn" id="copy-logs-btn">Copy Logs</button>
+              </div>
+            </div>
+            <pre id="terminal-output" class="terminal-output">Waiting for benchmark run...</pre>
+          </div>
+        </section>
+
+        <!-- Generated Files -->
+        <section id="results-panel" class="panel hidden" aria-label="Generated Files">
+          <div class="section-title-row">
+            <h2>Generated Files</h2>
+            <div class="artifacts-header-actions">
+              <span id="artifact-dir-display" class="runtime-meta"></span>
+              <a id="download-zip-btn" class="btn btn-primary" href="#" download>
+                Download All (.zip)
+              </a>
+            </div>
+          </div>
+          <div id="artifact-links-container" class="artifact-links"></div>
+        </section>
+
+        <!-- Session Run History -->
+        <section id="history-panel" class="panel hidden" aria-label="Recent Session Runs">
+          <div class="section-title-row">
+            <h2>Session Runs</h2>
+          </div>
+          <div id="history-list" class="history-list"></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
