@@ -16,7 +16,7 @@
 
 Lightweight Web & CLI wrapper for running **NVIDIA AIPerf** (`aiperf`) LLM performance benchmarks against **Google Cloud Vertex AI Endpoints** authenticated with **your Google Account (OAuth 2.0)**.
 
-![GEAP AIPerf Runner](public/readme_illustration.png)
+![Configuration Tab — CLI Command & Backend Selector](public/readme_illustration.png)
 
 ## Features
 
@@ -39,7 +39,12 @@ Lightweight Web & CLI wrapper for running **NVIDIA AIPerf** (`aiperf`) LLM perfo
 - **Past Runs & Side-by-Side Metrics Analysis (`artifacts/`)**:
   - Dedicated **Past Runs & Metrics** tab that automatically discovers historical runs inside `artifacts/` (parsing `profile_export_aiperf.json`, `profile_export_aiperf.csv` fallback, nested sweep folders, and per-request `profile_export.jsonl` traces, while flagging cancelled/incomplete log-only runs).
   - **Single-Run Analysis**: Select one run to inspect KPI tiles, an interactive SVG **Latency Percentile Spread** (`p25–p75` IQR, `p50` median, `avg`, `p90`/`p99` tail markers), **Prefill (`TTFT`) vs. Decode Time Composition**, **Per-Request Latency Histograms & Token-Length Scaling Scatter Plots**, and a full statistical table (`avg`, `p50`, `p90`, `p95`, `p99`, `min`, `max`, `std`).
+
+    ![Single-Run Analysis — Latency Percentile Spread & Prefill vs. Decode Composition](public/readme_illustration_2.png)
+
   - **Multi-Run Comparison**: Select two or more runs to compare metrics side-by-side at any statistic (`avg`, `p50`, `p90`, `p95`, `p99`, `min`, `max`) with **Grouped Latency & Throughput Bar Charts**, **Tail-Latency Percentile Curves (`p10` → `p99`)**, a **Throughput vs. Latency Pareto Frontier** plot, configurable **Baseline** `% Δ` improvement/regression badges, category filters, per-run `.zip` downloads, and one-click **Export CSV**.
+
+    ![Multi-Run Comparison — Side-by-Side Latency & Throughput Comparison](public/readme_illustration_3.png)
 
 ## Quick Start
 
