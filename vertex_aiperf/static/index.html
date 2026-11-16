@@ -169,12 +169,38 @@
               <ul id="cmd-notes-list" class="notes-list hidden"></ul>
             </div>
 
-            <!-- Optional Run Name & HuggingFace Token -->
+            <!-- Backend Selector & Characteristics (Step 2) -->
+            <div class="field-group">
+              <div class="field-header">
+                <label class="field-label" for="backend-select">
+                  <span class="step-num">2</span>
+                  Backend
+                </label>
+                <div>
+                  <button type="button" class="btn btn-ghost" id="detect-backend-btn">
+                    Detect from Endpoint
+                  </button>
+                  <button type="button" class="btn btn-ghost hidden" id="clear-backend-btn">
+                    Clear
+                  </button>
+                </div>
+              </div>
+              <p class="field-hint">
+                Automatically pre-selected from your Vertex AI Endpoint when available, or choose a predefined backend below to view hardware characteristics.
+              </p>
+              <select id="backend-select" class="mono-select">
+                <option value="">— Select a backend (optional) —</option>
+              </select>
+              <div id="backend-detect-status" class="backend-detect-status hidden" aria-live="polite"></div>
+              <div id="backend-specs-card" class="backend-specs-card hidden" aria-live="polite"></div>
+            </div>
+
+            <!-- Optional Run Name & HuggingFace Token (Steps 3 & 4) -->
             <div class="options-grid">
               <div class="field-group">
                 <div class="field-header">
                   <label class="field-label" for="run-name-input">
-                    <span class="step-num">2</span>
+                    <span class="step-num">3</span>
                     Run Name (Optional)
                   </label>
                 </div>
@@ -194,7 +220,7 @@
               <div class="field-group">
                 <div class="field-header">
                   <label class="field-label" for="hf-token-input">
-                    <span class="step-num">3</span>
+                    <span class="step-num">4</span>
                     HuggingFace Token (Optional)
                   </label>
                 </div>

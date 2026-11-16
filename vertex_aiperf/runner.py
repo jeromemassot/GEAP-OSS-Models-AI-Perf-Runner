@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import json
 import os
 import re
 import signal
@@ -20,6 +21,7 @@ from vertex_aiperf.auth import (
     GoogleIdentityTokenProvider,
     PrincipalInfo,
 )
+from vertex_aiperf.backends import get_backend_info
 from vertex_aiperf.command_parser import (
     ParsedAIPerfCommand,
     parse_and_validate_aiperf_command,
@@ -81,6 +83,7 @@ class BenchmarkJob:
     parsed_cmd: ParsedAIPerfCommand
     auth_mode: str  # "direct" | "proxy"
     artifact_dir: Path
+    backend: dict[str, Any] | None = None
     status: str = "starting"  # starting | running | succeeded | failed | cancelled
     return_code: int | None = None
     finished_at: str | None = None
@@ -130,6 +133,7 @@ class BenchmarkJob:
             "return_code": self.return_code,
             "error_message": self.error_message,
             "auth_mode": self.auth_mode,
+            "backend": self.backend,
             "principal": self.principal.to_dict(),
             "command": self.parsed_cmd.to_dict(),
             "artifact_dir": str(self.artifact_dir),
@@ -180,6 +184,7 @@ class RunManager:
         self,
         *,
         raw_command: str,
+        backend: str | None = None,
         run_name: str | None = None,
         hf_token: str | None = None,
         quota_project: str | None = None,
@@ -188,6 +193,7 @@ class RunManager:
         if auth_mode not in ("direct", "proxy"):
             raise ValueError("auth_mode must be 'direct' or 'proxy'.")
 
+        backend_info = get_backend_info(backend)
         clean_run_name = sanitize_run_name(run_name)
         clean_hf_token = (hf_token or "").strip() or None
 
@@ -233,6 +239,7 @@ class RunManager:
                 parsed_cmd=parsed,
                 auth_mode=auth_mode,
                 artifact_dir=artifact_dir,
+                backend=backend_info,
             )
             self._jobs[run_id] = job
             self._active_run_id = run_id
@@ -260,6 +267,11 @@ class RunManager:
 
         try:
             job.artifact_dir.mkdir(parents=True, exist_ok=True)
+            if job.backend is not None:
+                (job.artifact_dir / "geap_run_metadata.json").write_text(
+                    json.dumps({"backend": job.backend}, indent=2),
+                    encoding="utf-8",
+                )
 
             if (
                 job.parsed_cmd.subcommand == "profile"
@@ -418,6 +430,7 @@ def _interactive_terminal_oauth(auth_manager: GoogleAuthManager) -> None:
 async def run_cli_mode(
     *,
     raw_command: str,
+    backend: str | None = None,
     run_name: str | None = None,
     hf_token: str | None = None,
     quota_project: str | None = None,
@@ -429,6 +442,7 @@ async def run_cli_mode(
     if not mgr.get_status()["authenticated"]:
         await asyncio.to_thread(_interactive_terminal_oauth, mgr)
 
+    backend_info = get_backend_info(backend)
     token_provider = mgr.build_token_provider(
         quota_project=quota_project,
     )
@@ -448,13 +462,23 @@ async def run_cli_mode(
         print(f"[vertex-aiperf] Note: {note}", file=sys.stderr)
 
     exec_tokens = list(parsed.tokens)
-    if (
+    target_dir: Path | None = None
+    if parsed.has_explicit_artifact_dir and parsed.artifact_dir:
+        target_dir = Path(parsed.artifact_dir)
+    elif (
         clean_run_name
         and parsed.subcommand == "profile"
         and not parsed.has_explicit_artifact_dir
     ):
         target_dir = (WORKSPACE_ROOT / "artifacts" / clean_run_name).resolve()
         exec_tokens.extend(["--output-artifact-dir", str(target_dir)])
+
+    if backend_info is not None and target_dir is not None:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        (target_dir / "geap_run_metadata.json").write_text(
+            json.dumps({"backend": backend_info}, indent=2),
+            encoding="utf-8",
+        )
     env = os.environ.copy()
     if hf_token and hf_token.strip():
         env["HF_TOKEN"] = hf_token.strip()

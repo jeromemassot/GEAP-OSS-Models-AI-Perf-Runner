@@ -478,9 +478,23 @@ class TestEndToEndGoogleAccountAIPerf(unittest.TestCase):
             self.assertIn('id="past-runs-selector-list"', html_page)
             self.assertIn('id="comparison-table-wrapper"', html_page)
             self.assertIn('id="results-charts-grid"', html_page)
+            self.assertIn('id="backend-select"', html_page)
+            self.assertIn('id="backend-specs-card"', html_page)
             self.assertIn('id="run-name-input"', html_page)
             self.assertIn('type="password"', html_page)
             self.assertIn('id="hf-token-input"', html_page)
+            # Verify sequential step numbering 1 -> 2 -> 3 -> 4 in Configuration tab
+            step_nums = re.findall(r'<span class="step-num">(\d+)</span>', html_page)
+            self.assertEqual(step_nums, ["1", "2", "3", "4"])
+
+            backends_res = client.get("/api/backends")
+            self.assertEqual(backends_res.status_code, 200)
+            backends_list = backends_res.json()["backends"]
+            self.assertEqual(len(backends_list), 29)
+            by_id = {b["id"]: b for b in backends_list}
+            self.assertEqual(by_id["a3-highgpu-8g"]["vram_gb"], 640)
+            self.assertEqual(by_id["a4-highgpu-8g"]["memory_bandwidth_gb_s"], 64000)
+            self.assertEqual(by_id["g4-standard-384"]["chip_name"], "Nvidia RTX PRO 6000 (8x)")
             self.assertIn('id="download-zip-btn"', html_page)
             self.assertIn('id="history-panel"', html_page)
             self.assertNotIn("identity-source-select", html_page)
@@ -507,7 +521,13 @@ class TestEndToEndGoogleAccountAIPerf(unittest.TestCase):
             verify_res = client.post("/api/auth/verify", json={}).json()
             self.assertTrue(verify_res["valid"])
 
-            # 4. Run full AIPerf benchmark in BOTH 'direct' and 'proxy' modes (with custom run_name and optional hf_token)
+            # 4. Run full AIPerf benchmark in BOTH 'direct' and 'proxy' modes (with backend, custom run_name, and optional hf_token)
+            bad_backend_res = client.post(
+                "/api/runs",
+                json={"command": cmd, "backend": "nonexistent-gpu-99"},
+            )
+            self.assertEqual(bad_backend_res.status_code, 400)
+
             test_hf_secret = "hf_secretTestTokenValue123456789"
             for mode in ("direct", "proxy"):
                 self.auth_headers_seen.clear()
@@ -516,6 +536,7 @@ class TestEndToEndGoogleAccountAIPerf(unittest.TestCase):
                     "/api/runs",
                     json={
                         "command": cmd,
+                        "backend": "a3-highgpu-8g",
                         "run_name": custom_name,
                         "hf_token": test_hf_secret,
                         "auth_mode": mode,
@@ -585,6 +606,8 @@ class TestEndToEndGoogleAccountAIPerf(unittest.TestCase):
                 self.assertTrue(r_obj["has_records_jsonl"])
                 self.assertEqual(r_obj["model"], "Qwen/Qwen3.5-9B")
                 self.assertEqual(r_obj["concurrency"], 2)
+                self.assertEqual(r_obj["backend"]["id"], "a3-highgpu-8g")
+                self.assertEqual(r_obj["backend"]["hourly_cost_usd"], 30.0)
                 metric_tags = {m["tag"] for m in r_obj["metrics"]}
                 self.assertIn("time_to_first_token", metric_tags)
                 self.assertIn("inter_token_latency", metric_tags)
@@ -722,6 +745,201 @@ class TestArtifactResultsDiscovery(unittest.TestCase):
                 self.assertEqual(trav_rec.status_code, 404)
                 trav_zip = client.get("/api/artifact-runs/zip", params={"run_id": "../outside"})
                 self.assertEqual(trav_zip.status_code, 404)
+
+
+class TestEndpointBackendAutoDetection(unittest.TestCase):
+    """Tests Vertex AI endpoint `endpoints.get` backend auto-detection and predefined catalog fallback."""
+
+    def test_detect_catalog_backend_shared_pool_unlisted_and_403_fallback(self) -> None:
+        expected_tok = "mock-detect-oauth-token-123"
+        loop = asyncio.new_event_loop()
+        ready = threading.Event()
+        port_box: list[int] = []
+
+        async def handle_ep_catalog(request: web.Request) -> web.Response:
+            if request.headers.get("Authorization") != f"Bearer {expected_tok}":
+                return web.json_response({"error": {"message": "Unauthenticated"}}, status=401)
+            return web.json_response(
+                {
+                    "displayName": "qwen-prod-endpoint",
+                    "trafficSplit": {"dm-old": 0, "dm-active": 100},
+                    "deployedModels": [
+                        {
+                            "id": "dm-old",
+                            "displayName": "old-l4",
+                            "dedicatedResources": {
+                                "machineSpec": {"machineType": "g2-standard-8", "acceleratorType": "NVIDIA_L4", "acceleratorCount": 1},
+                                "minReplicaCount": 1,
+                            },
+                        },
+                        {
+                            "id": "dm-active",
+                            "displayName": "qwen3.5-h100",
+                            "dedicatedResources": {
+                                "machineSpec": {
+                                    "machineType": "a3-highgpu-8g",
+                                    "acceleratorType": "NVIDIA_H100_80GB",
+                                    "acceleratorCount": 8,
+                                },
+                                "minReplicaCount": 1,
+                                "maxReplicaCount": 2,
+                            },
+                        },
+                    ],
+                }
+            )
+
+        async def handle_ep_shared(request: web.Request) -> web.Response:
+            return web.json_response(
+                {
+                    "displayName": "shared-pool-ep",
+                    "deployedModels": [
+                        {
+                            "id": "dm-1",
+                            "sharedResources": "projects/123456789012/locations/us-central1/deploymentResourcePools/pool-g4",
+                        }
+                    ],
+                }
+            )
+
+        async def handle_pool(request: web.Request) -> web.Response:
+            return web.json_response(
+                {
+                    "dedicatedResources": {
+                        "machineSpec": {
+                            "machineType": "g4-standard-96",
+                            "acceleratorType": "NVIDIA_RTX_PRO_6000",
+                            "acceleratorCount": 2,
+                        },
+                        "minReplicaCount": 2,
+                        "maxReplicaCount": 2,
+                    }
+                }
+            )
+
+        async def handle_ep_unlisted(request: web.Request) -> web.Response:
+            return web.json_response(
+                {
+                    "deployedModels": [
+                        {
+                            "id": "dm-tpu",
+                            "dedicatedResources": {
+                                "machineSpec": {
+                                    "machineType": "ct5lp-hightpu-4t",
+                                    "acceleratorType": "TPU_V5_LITEPOD",
+                                    "acceleratorCount": 4,
+                                }
+                            },
+                        }
+                    ]
+                }
+            )
+
+        async def handle_ep_forbidden(request: web.Request) -> web.Response:
+            return web.json_response(
+                {"error": {"message": "Permission 'aiplatform.endpoints.get' denied"}},
+                status=403,
+            )
+
+        async def boot() -> None:
+            app = web.Application()
+            app.router.add_get("/v1/projects/123456789012/locations/us-central1/endpoints/ep-h100", handle_ep_catalog)
+            app.router.add_get("/v1/projects/123456789012/locations/us-central1/endpoints/ep-shared", handle_ep_shared)
+            app.router.add_get("/v1/projects/123456789012/locations/us-central1/deploymentResourcePools/pool-g4", handle_pool)
+            app.router.add_get("/v1/projects/123456789012/locations/us-central1/endpoints/ep-tpu", handle_ep_unlisted)
+            app.router.add_get("/v1/projects/123456789012/locations/us-central1/endpoints/ep-403", handle_ep_forbidden)
+            runner = web.AppRunner(app, access_log=None)
+            await runner.setup()
+            site = web.TCPSite(runner, "127.0.0.1", 0)
+            await site.start()
+            port_box.append(site._server.sockets[0].getsockname()[1])
+            ready.set()
+
+        t = threading.Thread(
+            target=lambda: (asyncio.set_event_loop(loop), loop.run_until_complete(boot()), loop.run_forever()),
+            daemon=True,
+        )
+        t.start()
+        ready.wait(timeout=5.0)
+        base_api = f"http://127.0.0.1:{port_box[0]}"
+
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir, MockGoogleOAuth2Server(
+                minted_access_token=expected_tok
+            ) as oauth_srv:
+                auth_mgr = GoogleAuthManager(
+                    auth_uri=oauth_srv.auth_uri,
+                    token_uri=oauth_srv.token_uri,
+                    userinfo_uri=oauth_srv.userinfo_uri,
+                    persist_session=False,
+                )
+                mgr = RunManager(base_runs_dir=Path(tmpdir), auth_manager=auth_mgr)
+                fastapi_app = create_app(mgr, vertex_api_base_url=base_api)
+
+                with TestClient(fastapi_app) as client:
+                    # 1. Predefined catalog always returns all 29 backends
+                    cat_res = client.get("/api/backends").json()
+                    self.assertEqual(len(cat_res["backends"]), 29)
+
+                    # 2. Before sign-in: returns graceful fallback with requires_auth=True
+                    unauth = client.post(
+                        "/api/backends/detect",
+                        json={"project": "123456789012", "location": "us-central1", "endpoint_id": "ep-h100"},
+                    ).json()
+                    self.assertFalse(unauth["detected"])
+                    self.assertTrue(unauth["requires_auth"])
+
+                    # Sign in
+                    _, state = auth_mgr.start_oauth_flow(redirect_uri="http://localhost:8080/", client_id="cid")
+                    oauth_srv.expected_code_challenge = None
+                    auth_mgr.complete_oauth_flow(state=state, code="4/ok")
+
+                    # 3. Signed-in detection matches trafficSplit winner -> a3-highgpu-8g in catalog
+                    cmd_str = (
+                        'aiperf profile --model Qwen/Qwen3.5-9B '
+                        '--url "https://ep-h100.us-central1-123456789012.prediction.vertexai.goog'
+                        '/v1/projects/123456789012/locations/us-central1/endpoints/ep-h100/invoke/v1/chat/completions" '
+                        '--endpoint-type chat --streaming'
+                    )
+                    det1 = client.post("/api/backends/detect", json={"command": cmd_str}).json()
+                    self.assertTrue(det1["detected"])
+                    self.assertTrue(det1["in_catalog"])
+                    self.assertEqual(det1["backend_id"], "a3-highgpu-8g")
+                    self.assertEqual(det1["backend"]["vram_gb"], 640)
+                    self.assertEqual(det1["backend"]["hourly_cost_usd"], 30.0)
+                    self.assertEqual(det1["min_replica_count"], 1)
+                    self.assertEqual(det1["max_replica_count"], 2)
+
+                    # 4. Shared DeploymentResourcePool follow-up detection -> g4-standard-96
+                    det_shared = client.post(
+                        "/api/backends/detect",
+                        json={"project": "123456789012", "location": "us-central1", "endpoint_id": "ep-shared"},
+                    ).json()
+                    self.assertTrue(det_shared["detected"])
+                    self.assertEqual(det_shared["backend_id"], "g4-standard-96")
+                    self.assertEqual(det_shared["backend"]["vram_gb"], 96)
+
+                    # 5. Unlisted machineType dynamically registered while catalog remains intact
+                    det_tpu = client.post(
+                        "/api/backends/detect",
+                        json={"project": "123456789012", "location": "us-central1", "endpoint_id": "ep-tpu"},
+                    ).json()
+                    self.assertTrue(det_tpu["detected"])
+                    self.assertFalse(det_tpu["in_catalog"])
+                    self.assertEqual(det_tpu["backend_id"], "ct5lp-hightpu-4t")
+                    self.assertEqual(det_tpu["backend"]["family"], "TPU")
+                    self.assertEqual(len(client.get("/api/backends").json()["backends"]), 29)
+
+                    # 6. 403 Permission Denied falls back cleanly without breaking dropdown catalog
+                    det_403 = client.post(
+                        "/api/backends/detect",
+                        json={"project": "123456789012", "location": "us-central1", "endpoint_id": "ep-403"},
+                    ).json()
+                    self.assertFalse(det_403["detected"])
+                    self.assertIn("403", det_403["reason"])
+        finally:
+            loop.call_soon_threadsafe(loop.stop)
+            t.join(timeout=3.0)
 
 
 if __name__ == "__main__":

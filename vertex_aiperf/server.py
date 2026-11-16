@@ -20,6 +20,7 @@ from vertex_aiperf.auth import (
     GOOGLE_SDK_AUTHCODE_REDIRECT_URI,
     GoogleAuthError,
 )
+from vertex_aiperf.backends import detect_vertex_endpoint_backend, list_backends
 from vertex_aiperf.command_parser import (
     CommandParseError,
     parse_and_validate_aiperf_command,
@@ -56,8 +57,22 @@ class ValidateCommandRequest(BaseModel):
     command: str = Field(..., description="AIPerf CLI command string")
 
 
+class DetectBackendRequest(BaseModel):
+    command: str | None = Field(
+        default=None,
+        description="Optional AIPerf CLI command string from which to extract the Vertex AI endpoint URL.",
+    )
+    project: str | None = None
+    location: str | None = None
+    endpoint_id: str | None = None
+
+
 class StartRunRequest(BaseModel):
     command: str = Field(..., description="AIPerf CLI command string")
+    backend: str | None = Field(
+        default=None,
+        description="Optional deployment backend machine type (e.g. 'a3-highgpu-8g').",
+    )
     run_name: str | None = Field(
         default=None,
         description="Optional custom run name (also used for the downloaded .zip filename).",
@@ -158,7 +173,11 @@ def _compute_static_asset_version() -> str:
     return digest.hexdigest()[:10]
 
 
-def create_app(run_manager: RunManager | None = None) -> FastAPI:
+def create_app(
+    run_manager: RunManager | None = None,
+    *,
+    vertex_api_base_url: str | None = None,
+) -> FastAPI:
     manager = run_manager or RunManager()
     app = FastAPI(
         title="GEAP AIPerf Runner",
@@ -304,6 +323,56 @@ def create_app(run_manager: RunManager | None = None) -> FastAPI:
         except CommandParseError as exc:
             return {"valid": False, "error": str(exc)}
 
+    @app.get("/api/backends")
+    async def api_list_backends() -> dict[str, Any]:
+        return {"backends": list_backends()}
+
+    @app.post("/api/backends/detect")
+    async def api_detect_backend(req: DetectBackendRequest) -> dict[str, Any]:
+        proj = (req.project or "").strip() or None
+        loc = (req.location or "").strip() or None
+        ep_id = (req.endpoint_id or "").strip() or None
+
+        if (not proj or not loc or not ep_id) and req.command:
+            try:
+                parsed = await asyncio.to_thread(
+                    parse_and_validate_aiperf_command, req.command
+                )
+                for ve in parsed.vertex_endpoints:
+                    if ve.project and ve.location and ve.endpoint_id:
+                        proj, loc, ep_id = ve.project, ve.location, ve.endpoint_id
+                        break
+            except CommandParseError as exc:
+                return {"detected": False, "reason": str(exc)}
+
+        if not proj or not loc or not ep_id:
+            return {
+                "detected": False,
+                "reason": "No Vertex AI project/location/endpoint URL detected in command — select a backend manually.",
+            }
+
+        try:
+            provider = await asyncio.to_thread(
+                manager.auth_manager.build_token_provider,
+                quota_project=proj,
+            )
+            access_token, _ = await asyncio.to_thread(provider.get_access_token)
+        except GoogleAuthError:
+            return {
+                "detected": False,
+                "requires_auth": True,
+                "reason": "Sign in with Google to auto-detect the backend from your Vertex AI endpoint, or select one manually below.",
+            }
+
+        return await asyncio.to_thread(
+            detect_vertex_endpoint_backend,
+            project=proj,
+            location=loc,
+            endpoint_id=ep_id,
+            access_token=access_token,
+            api_base_url=vertex_api_base_url,
+        )
+
     @app.get("/api/runs")
     async def api_list_runs() -> dict[str, Any]:
         return {"runs": manager.list_jobs()}
@@ -313,6 +382,7 @@ def create_app(run_manager: RunManager | None = None) -> FastAPI:
         try:
             job = await manager.start_run(
                 raw_command=req.command,
+                backend=req.backend,
                 run_name=req.run_name,
                 hf_token=req.hf_token,
                 quota_project=req.quota_project,

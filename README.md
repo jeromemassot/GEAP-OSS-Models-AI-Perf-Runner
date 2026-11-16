@@ -24,6 +24,9 @@ Lightweight Web & CLI wrapper for running **NVIDIA AIPerf** (`aiperf`) LLM perfo
   - Authenticate directly via **Sign in with Google** (`http://localhost:<port>/` loopback callback) and verify active token validity with **Verify Token**.
 - **AIPerf CLI Command Editor & Inspector**:
   - Generous multi-line script editor supporting `\` line continuations, real-time validation against AIPerf's configuration resolver, and metadata tiles (`Model`, `Type`, `Vertex Project`, `Region`, `Endpoint ID`, `Dataset`, `Load`, `num-conversations`).
+- **Backend Selector & Hardware Characteristics**:
+  - Built-in catalog of 29 Google Cloud GPU machine backends across the **A2** (`NVIDIA A100 40GB / 80GB`), **A3** (`NVIDIA H100 / H200`), **A4** (`NVIDIA B200`), **A4X** (`NVIDIA GB200`), **G2** (`NVIDIA L4`), and **G4** (`NVIDIA RTX PRO 6000`) series.
+  - Displays live hardware specs (`Chip Name`, `Accelerator Type`, `Accelerator Count`, `Total VRAM`, `Memory Bandwidth`, `Hourly Cost`, and `Description`) upon selection, supports `--backend` in CLI mode, and persists `geap_run_metadata.json` in the run's artifact folder so backend metadata surfaces in **Past Runs & Metrics**.
 - **Custom Run Name & `.zip` Archive**:
   - Optional Run Name field used to label the run, name its artifact folder, and name the downloaded `<run_name>.zip` archive when downloading all generated artifacts.
 - **Optional HuggingFace Token (`HF_TOKEN`)**:
@@ -66,13 +69,14 @@ GOOGLE_OAUTH_CLIENT_SECRET=your-oauth-client-secret
 
 Open **http://localhost:8080** in your browser:
 1. Click **Sign in with Google** (and optionally **Verify Token**).
-2. In the **Configuration** tab, enter your `aiperf profile ...` command (replacing `YOUR-PROJECT-NUMBER` and `YOUR-ENDPOINT-ID` with your deployed Vertex AI endpoint) and click **Run AIPerf Benchmark** to stream live output in the **AIPerf Output** tab.
+2. In the **Configuration** tab, enter your `aiperf profile ...` command (replacing `YOUR-PROJECT-NUMBER` and `YOUR-ENDPOINT-ID` with your deployed Vertex AI endpoint), optionally select your **Backend** (e.g. `a3-highgpu-8g`) and **Run Name**, and click **Run AIPerf Benchmark** to stream live output in the **AIPerf Output** tab.
 3. Open the **Past Runs & Metrics** tab to analyze a single run or select multiple runs from `artifacts/` for side-by-side comparison, interactive latency/throughput/Pareto charts, and CSV export.
 
 ### 3. Run via Terminal CLI Wrapper (Optional)
 
 ```bash
 .venv/bin/python app.py --cli \
+  --backend a3-highgpu-8g \
   --cmd 'aiperf profile --model Qwen/Qwen3.5-9B --use-server-token-count --random-seed 42 --url "https://[ENDPOINT-ID].us-central1-[PROJECT-ID].prediction.vertexai.goog/v1/projects/[PROJECT-ID]/locations/us-central1/endpoints/[ENDPOINT-ID]/invoke/v1/chat/completions" --endpoint-type chat --public-dataset exgentic_v2 --dataset-filter benchmark=swebench --dataset-filter harness=tool_calling --concurrency 5 --num-conversations 100 --streaming'
 ```
 

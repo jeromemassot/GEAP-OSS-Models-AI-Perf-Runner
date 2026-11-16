@@ -58,6 +58,12 @@ const els = {
   cmdMetaTags: document.getElementById("cmd-meta-tags"),
   cmdNotesList: document.getElementById("cmd-notes-list"),
 
+  backendSelect: document.getElementById("backend-select"),
+  detectBackendBtn: document.getElementById("detect-backend-btn"),
+  clearBackendBtn: document.getElementById("clear-backend-btn"),
+  backendDetectStatus: document.getElementById("backend-detect-status"),
+  backendSpecsCard: document.getElementById("backend-specs-card"),
+
   runNameInput: document.getElementById("run-name-input"),
   hfTokenInput: document.getElementById("hf-token-input"),
   toggleHfTokenBtn: document.getElementById("toggle-hf-token-btn"),
@@ -120,6 +126,13 @@ let runStartedEpochMs = null;
 let terminalLines = [];
 let tokenExpiryEpochMs = null;
 let tokenCountdownTimer = null;
+let isUserAuthenticated = false;
+let backendsList = [];
+let backendsById = new Map();
+let dynamicBackends = new Map();
+let currentVertexEndpointTarget = null;
+let lastAutoDetectKey = null;
+let detectedDeploymentMeta = null;
 
 /* --- Past Artifact Runs State --- */
 let pastArtifactRuns = [];
@@ -287,6 +300,7 @@ async function refreshAuthStatus() {
 }
 
 function renderAuthStatus(status) {
+  isUserAuthenticated = Boolean(status.authenticated);
   if (!status.authenticated) {
     els.googleSigninLabel.textContent = "Sign in with Google";
     els.googleSigninBtn.title = "Sign in with your Google Account";
@@ -375,7 +389,12 @@ async function verifyLiveToken() {
 window.addEventListener("message", (event) => {
   if (event.data && event.data.type === "vertex_aiperf_oauth_complete") {
     if (event.data.ok) {
-      refreshAuthStatus();
+      lastAutoDetectKey = null;
+      refreshAuthStatus().then(() => {
+        if (currentVertexEndpointTarget) {
+          autoDetectBackendFromEndpoint(false);
+        }
+      });
     } else {
       setTokenVisualState(false, "Sign-in cancelled");
     }
@@ -387,6 +406,7 @@ async function validateCommand() {
   const raw = els.cmdInput.value.trim();
 
   if (!raw) {
+    currentVertexEndpointTarget = null;
     els.cmdValidationBar.className = "validation-bar neutral";
     els.cmdValidationBar.innerHTML =
       "Enter an <code>aiperf</code> CLI command to validate arguments and inspect endpoint metadata.";
@@ -404,6 +424,7 @@ async function validateCommand() {
     const data = await resp.json();
 
     if (!data.valid) {
+      currentVertexEndpointTarget = null;
       els.cmdValidationBar.className = "validation-bar invalid";
       els.cmdValidationBar.textContent = data.error || "Invalid AIPerf command.";
       els.cmdMetaTags.classList.add("hidden");
@@ -480,6 +501,27 @@ async function validateCommand() {
       els.cmdNotesList.classList.remove("hidden");
     } else {
       els.cmdNotesList.classList.add("hidden");
+    }
+
+    const firstVe = (p.vertex_endpoints || []).find(
+      (ve) => ve.is_vertex_ai && ve.project && ve.location && ve.endpoint_id
+    );
+    if (firstVe) {
+      currentVertexEndpointTarget = {
+        project: firstVe.project,
+        location: firstVe.location,
+        endpoint_id: firstVe.endpoint_id,
+      };
+      const isPlaceholder =
+        firstVe.project.toUpperCase().includes("YOUR-") ||
+        firstVe.endpoint_id.toUpperCase().includes("YOUR-") ||
+        firstVe.project.includes("[") ||
+        firstVe.endpoint_id.includes("[");
+      if (!isPlaceholder) {
+        autoDetectBackendFromEndpoint(false);
+      }
+    } else {
+      currentVertexEndpointTarget = null;
     }
   } catch (err) {
     els.cmdValidationBar.className = "validation-bar invalid";
@@ -605,6 +647,7 @@ function renderArtifacts(job) {
 async function startBenchmark() {
   els.errorBanner.classList.add("hidden");
   const command = els.cmdInput.value.trim();
+  const backend = els.backendSelect.value || null;
   const runName = els.runNameInput.value.trim() || null;
   const hfToken = els.hfTokenInput.value.trim() || null;
   const authMode = getSelectedAuthMode();
@@ -616,6 +659,11 @@ async function startBenchmark() {
   }
 
   localStorage.setItem("vertex_aiperf_cmd", command);
+  if (backend) {
+    localStorage.setItem("vertex_aiperf_backend", backend);
+  } else {
+    localStorage.removeItem("vertex_aiperf_backend");
+  }
   if (runName) {
     localStorage.setItem("vertex_aiperf_run_name", runName);
   } else {
@@ -633,6 +681,7 @@ async function startBenchmark() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         command,
+        backend,
         run_name: runName,
         hf_token: hfToken,
         auth_mode: authMode,
@@ -724,18 +773,245 @@ async function refreshHistory() {
   }
 }
 
+function rebuildBackendSelectOptions(preserveValue = null) {
+  const targetVal = preserveValue !== null ? preserveValue : els.backendSelect.value;
+  const groups = new Map();
+
+  if (dynamicBackends.size > 0) {
+    groups.set("Detected from Vertex AI Endpoint", [...dynamicBackends.values()]);
+  }
+  for (const b of backendsList) {
+    const grp = b.series || "Backends";
+    if (!groups.has(grp)) groups.set(grp, []);
+    groups.get(grp).push(b);
+  }
+
+  const optgroupsHtml = [...groups.entries()]
+    .map(([seriesName, items]) => {
+      const opts = items
+        .map((b) => {
+          const vramPart = b.vram_gb !== null && b.vram_gb !== undefined ? ` · ${b.vram_gb} GB VRAM` : "";
+          const costPart =
+            b.hourly_cost_usd !== null && b.hourly_cost_usd !== undefined
+              ? ` · $${Number(b.hourly_cost_usd).toFixed(2)}/hr`
+              : "";
+          return `<option value="${escapeHtml(b.id)}">${escapeHtml(b.id)} — ${escapeHtml(b.chip_name)}${vramPart}${costPart}</option>`;
+        })
+        .join("");
+      return `<optgroup label="${escapeHtml(seriesName)}">${opts}</optgroup>`;
+    })
+    .join("");
+
+  els.backendSelect.innerHTML =
+    `<option value="">— Select a backend (optional) —</option>` + optgroupsHtml;
+
+  if (targetVal && (backendsById.has(targetVal) || dynamicBackends.has(targetVal))) {
+    els.backendSelect.value = targetVal;
+  }
+}
+
+function setBackendDetectStatus(mode, text) {
+  if (!text) {
+    els.backendDetectStatus.classList.add("hidden");
+    els.backendDetectStatus.textContent = "";
+    return;
+  }
+  els.backendDetectStatus.className = `backend-detect-status ${mode === "detected" ? "detected" : "fallback"}`;
+  els.backendDetectStatus.textContent = text;
+}
+
+function renderSelectedBackendSpecs() {
+  const selectedId = els.backendSelect.value;
+  const info = selectedId ? backendsById.get(selectedId) || dynamicBackends.get(selectedId) : null;
+
+  if (!info) {
+    els.backendSpecsCard.classList.add("hidden");
+    els.backendSpecsCard.innerHTML = "";
+    els.clearBackendBtn.classList.add("hidden");
+    return;
+  }
+
+  els.clearBackendBtn.classList.remove("hidden");
+  const hasVram = info.vram_gb !== null && info.vram_gb !== undefined;
+  const perChipVram =
+    hasVram && info.accelerator_count > 1
+      ? ` (${Math.round(info.vram_gb / info.accelerator_count)} GB / chip)`
+      : "";
+  const vramStr = hasVram ? `${info.vram_gb} GB${perChipVram}` : "N/A";
+  const bwStr =
+    info.memory_bandwidth_gb_s !== null && info.memory_bandwidth_gb_s !== undefined
+      ? `${Number(info.memory_bandwidth_gb_s).toLocaleString("en-US")} GB/s`
+      : "N/A";
+  const costStr =
+    info.hourly_cost_usd !== null && info.hourly_cost_usd !== undefined
+      ? `$${Number(info.hourly_cost_usd).toFixed(2)} / hr`
+      : "Unlisted";
+  const accelCountStr =
+    info.accelerator_count > 0
+      ? `${info.accelerator_count}x ${info.family}`
+      : info.family;
+
+  let replicaItemHtml = "";
+  if (
+    detectedDeploymentMeta &&
+    detectedDeploymentMeta.backend_id === info.id &&
+    (detectedDeploymentMeta.min_replica_count !== null ||
+      detectedDeploymentMeta.max_replica_count !== null)
+  ) {
+    const minR = detectedDeploymentMeta.min_replica_count ?? "?";
+    const maxR = detectedDeploymentMeta.max_replica_count ?? minR;
+    const repText = minR === maxR ? `${minR}` : `${minR} – ${maxR}`;
+    replicaItemHtml = `
+      <div class="backend-spec-item">
+        <span class="backend-spec-label">Endpoint Replicas</span>
+        <span class="backend-spec-val">${escapeHtml(repText)}</span>
+      </div>`;
+  }
+
+  els.backendSpecsCard.innerHTML = `
+    <div class="backend-specs-top">
+      <div class="backend-specs-title-row">
+        <span class="backend-machine-badge">${escapeHtml(info.id)}</span>
+        <span class="backend-family-badge">${escapeHtml(info.family)}</span>
+        <span class="backend-chip-heading">${escapeHtml(info.chip_name)}</span>
+      </div>
+      <span class="backend-cost-pill">${escapeHtml(costStr)}</span>
+    </div>
+    <p class="backend-specs-desc">${escapeHtml(info.description)}</p>
+    <div class="backend-specs-grid">
+      <div class="backend-spec-item">
+        <span class="backend-spec-label">Accelerator Type</span>
+        <span class="backend-spec-val">${escapeHtml(info.accelerator_type)}</span>
+      </div>
+      <div class="backend-spec-item">
+        <span class="backend-spec-label">Accelerator Count</span>
+        <span class="backend-spec-val">${escapeHtml(accelCountStr)}</span>
+      </div>
+      <div class="backend-spec-item">
+        <span class="backend-spec-label">Total VRAM</span>
+        <span class="backend-spec-val">${escapeHtml(vramStr)}</span>
+      </div>
+      <div class="backend-spec-item">
+        <span class="backend-spec-label">Memory Bandwidth</span>
+        <span class="backend-spec-val">${escapeHtml(bwStr)}</span>
+      </div>
+      <div class="backend-spec-item">
+        <span class="backend-spec-label">Hourly Cost</span>
+        <span class="backend-spec-val">${escapeHtml(costStr)}</span>
+      </div>
+      ${replicaItemHtml}
+    </div>`;
+  els.backendSpecsCard.classList.remove("hidden");
+}
+
+async function autoDetectBackendFromEndpoint(forceManualClick = false) {
+  const rawCmd = els.cmdInput.value.trim();
+  const payload = currentVertexEndpointTarget
+    ? { ...currentVertexEndpointTarget }
+    : { command: rawCmd };
+
+  const cacheKey = currentVertexEndpointTarget
+    ? `${currentVertexEndpointTarget.project}:${currentVertexEndpointTarget.location}:${currentVertexEndpointTarget.endpoint_id}:${isUserAuthenticated}`
+    : null;
+
+  if (!forceManualClick && cacheKey && cacheKey === lastAutoDetectKey) {
+    return;
+  }
+  if (cacheKey) {
+    lastAutoDetectKey = cacheKey;
+  }
+
+  if (forceManualClick) {
+    els.detectBackendBtn.disabled = true;
+    els.detectBackendBtn.textContent = "Detecting...";
+  }
+
+  try {
+    const resp = await fetch("/api/backends/detect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+
+    if (data.detected && data.backend_id && data.backend) {
+      detectedDeploymentMeta = data;
+      if (!backendsById.has(data.backend_id)) {
+        dynamicBackends.set(data.backend_id, data.backend);
+        rebuildBackendSelectOptions(data.backend_id);
+      } else {
+        els.backendSelect.value = data.backend_id;
+      }
+      localStorage.setItem("vertex_aiperf_backend", data.backend_id);
+      const modelNote = data.deployed_model_display_name
+        ? ` (${data.deployed_model_display_name})`
+        : "";
+      setBackendDetectStatus(
+        "detected",
+        `Auto-selected '${data.backend_id}' from Vertex AI Endpoint${modelNote}`
+      );
+      renderSelectedBackendSpecs();
+      return;
+    }
+
+    if (forceManualClick || !data.requires_auth) {
+      setBackendDetectStatus(
+        "fallback",
+        data.reason || "Could not auto-detect backend from endpoint — select a predefined backend from the list."
+      );
+    } else if (!els.backendSelect.value) {
+      setBackendDetectStatus(
+        "fallback",
+        "Sign in with Google to auto-detect the backend from your Vertex AI endpoint, or choose from the predefined list."
+      );
+    }
+  } catch {
+    if (forceManualClick) {
+      setBackendDetectStatus(
+        "fallback",
+        "Could not reach backend detection API — select a predefined backend from the list."
+      );
+    }
+  } finally {
+    if (forceManualClick) {
+      els.detectBackendBtn.disabled = false;
+      els.detectBackendBtn.textContent = "Detect from Endpoint";
+    }
+  }
+}
+
+async function loadBackendsCatalog() {
+  try {
+    const resp = await fetch("/api/backends");
+    if (!resp.ok) return;
+    const data = await resp.json();
+    backendsList = Array.isArray(data.backends) ? data.backends : [];
+    backendsById = new Map(backendsList.map((b) => [b.id, b]));
+
+    const savedBackend = localStorage.getItem("vertex_aiperf_backend");
+    rebuildBackendSelectOptions(savedBackend || "");
+    renderSelectedBackendSpecs();
+  } catch {
+    // Ignore transient fetch errors
+  }
+}
+
 function copyCliEquivalent() {
   const cmd = els.cmdInput.value.trim() || "aiperf profile ...";
+  const backend = els.backendSelect.value.trim();
   const runName = els.runNameInput.value.trim();
   const hasHf = Boolean(els.hfTokenInput.value.trim());
   const mode = getSelectedAuthMode();
   const escapedCmd = cmd.replace(/'/g, "'\\''");
   const modeFlag = mode === "proxy" ? " --auth-mode proxy" : "";
+  const backendFlag = backend
+    ? ` --backend '${backend.replace(/'/g, "'\\''")}'`
+    : "";
   const nameFlag = runName
     ? ` --run-name '${runName.replace(/'/g, "'\\''")}'`
     : "";
   const hfFlag = hasHf ? ' --hf-token "$HF_TOKEN"' : "";
-  const full = `.venv/bin/python app.py --cli${modeFlag}${nameFlag}${hfFlag} --cmd '${escapedCmd}'`;
+  const full = `.venv/bin/python app.py --cli${modeFlag}${backendFlag}${nameFlag}${hfFlag} --cmd '${escapedCmd}'`;
   navigator.clipboard.writeText(full).then(() => {
     const orig = els.copyCliBtn.textContent;
     els.copyCliBtn.textContent = "Copied CLI Command";
@@ -914,6 +1190,9 @@ function renderRunSelectorList() {
       const ttft = getRunStat(run, "time_to_first_token", "avg");
       const outTps = getRunStat(run, "output_token_throughput", "avg");
       const chips = [];
+      if (run.backend?.id) {
+        chips.push(`<span class="run-meta-chip">${escapeHtml(run.backend.id)}</span>`);
+      }
       if (run.model) chips.push(`<span class="run-meta-chip">${escapeHtml(truncateLabel(run.model, 24))}</span>`);
       if (run.concurrency !== null && run.concurrency !== undefined) {
         chips.push(`<span class="run-meta-chip">c=${escapeHtml(run.concurrency)}</span>`);
@@ -2092,6 +2371,7 @@ function renderComparisonTable(selectedRuns, colorMap, statKey) {
     .map((r) => {
       const swatch = colorMap.get(r.run_id) || "#1168C6";
       const subParts = [];
+      if (r.backend?.id) subParts.push(r.backend.id);
       if (r.model) subParts.push(truncateLabel(r.model, 20));
       if (r.concurrency !== null && r.concurrency !== undefined) subParts.push(`c=${r.concurrency}`);
       if (r.run_id === baselineRun.run_id) subParts.push("baseline");
@@ -2390,6 +2670,31 @@ els.toggleHfTokenBtn.addEventListener("click", () => {
   els.toggleHfTokenBtn.textContent = isMasked ? "Hide" : "Show";
 });
 
+els.backendSelect.addEventListener("change", () => {
+  const val = els.backendSelect.value;
+  if (val) {
+    localStorage.setItem("vertex_aiperf_backend", val);
+  } else {
+    localStorage.removeItem("vertex_aiperf_backend");
+  }
+  if (!detectedDeploymentMeta || detectedDeploymentMeta.backend_id !== val) {
+    setBackendDetectStatus("", "");
+  }
+  renderSelectedBackendSpecs();
+});
+
+els.detectBackendBtn.addEventListener("click", () => {
+  autoDetectBackendFromEndpoint(true);
+});
+
+els.clearBackendBtn.addEventListener("click", () => {
+  els.backendSelect.value = "";
+  detectedDeploymentMeta = null;
+  localStorage.removeItem("vertex_aiperf_backend");
+  setBackendDetectStatus("", "");
+  renderSelectedBackendSpecs();
+});
+
 els.loadExampleBtn.addEventListener("click", () => {
   els.cmdInput.value = EXAMPLE_VERTEX_COMMAND;
   validateCommand();
@@ -2427,6 +2732,7 @@ els.copyLogsBtn.addEventListener("click", () => {
   }
   switchTab("config");
   refreshAuthStatus();
+  loadBackendsCatalog();
   validateCommand();
   loadPastArtifactRuns(false);
   refreshHistory().then(async () => {

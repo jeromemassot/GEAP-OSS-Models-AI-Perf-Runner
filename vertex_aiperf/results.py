@@ -523,6 +523,16 @@ def list_artifact_runs(base_runs_dir: Path) -> list[dict[str, Any]]:
         else:
             meta = _inspect_incomplete_log(run_dir)
 
+        backend_meta: dict[str, Any] | None = None
+        geap_meta_file = run_dir / "geap_run_metadata.json"
+        if geap_meta_file.is_file() and not geap_meta_file.is_symlink():
+            try:
+                geap_obj = _loads_bytes(geap_meta_file.read_bytes())
+                if isinstance(geap_obj, dict) and isinstance(geap_obj.get("backend"), dict):
+                    backend_meta = geap_obj["backend"]
+            except Exception:
+                pass
+
         timestamp = meta.get("start_time") or mtime_iso
         # Normalize naive ISO timestamps for consistent sorting
         sort_ts = mtime_iso
@@ -548,6 +558,7 @@ def list_artifact_runs(base_runs_dir: Path) -> list[dict[str, Any]]:
                 "parse_error": parse_error,
                 "model": meta.get("model"),
                 "models": meta.get("models") or [],
+                "backend": backend_meta,
                 "endpoint_type": meta.get("endpoint_type"),
                 "streaming": meta.get("streaming"),
                 "concurrency": meta.get("concurrency"),

@@ -19,6 +19,7 @@ import sys
 import uvicorn
 
 from vertex_aiperf.auth import GoogleAuthError
+from vertex_aiperf.backends import BACKEND_CATALOG
 from vertex_aiperf.command_parser import CommandParseError
 from vertex_aiperf.runner import run_cli_mode
 from vertex_aiperf.server import create_app
@@ -49,6 +50,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--command",
         dest="command",
         help="Full aiperf CLI command string to execute (required with --cli).",
+    )
+    parser.add_argument(
+        "--backend",
+        choices=tuple(BACKEND_CATALOG.keys()),
+        help="Optional deployment backend machine type (e.g. a3-highgpu-8g).",
     )
     parser.add_argument(
         "--run-name",
@@ -82,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(
                 run_cli_mode(
                     raw_command=args.command,
+                    backend=args.backend,
                     run_name=args.run_name,
                     hf_token=args.hf_token,
                     quota_project=args.quota_project,
