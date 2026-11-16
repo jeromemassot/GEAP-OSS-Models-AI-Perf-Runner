@@ -77,7 +77,7 @@
       </header>
 
       <main>
-        <!-- Multi-Tab Workspace: Tab 1 = Configuration, Tab 2 = AIPerf Output -->
+        <!-- Multi-Tab Workspace: Tab 1 = Configuration, Tab 2 = AIPerf Output, Tab 3 = Past Runs & Metrics -->
         <section class="tabs-container" aria-label="Benchmark Workspace">
           <div class="tabs-header">
             <div class="tabs-bar" role="tablist" aria-label="Workspace Views">
@@ -109,6 +109,21 @@
                 </svg>
                 <span>AIPerf Output</span>
                 <span id="run-status-badge" class="status-badge idle">Idle</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                id="tab-btn-results"
+                class="tab-btn"
+                aria-selected="false"
+                aria-controls="tab-panel-results"
+                tabindex="-1"
+              >
+                <svg class="tab-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 15.5v-5m4 5v-9m4 9v-6.5m4 6.5v-11M2.5 15.5h15" />
+                </svg>
+                <span>Past Runs &amp; Metrics</span>
+                <span id="past-runs-count-badge" class="status-badge idle">0</span>
               </button>
             </div>
           </div>
@@ -263,7 +278,116 @@
             </div>
             <pre id="terminal-output" class="terminal-output">Waiting for benchmark run...</pre>
           </div>
+
+          <!-- Tab 3: Past Runs & Side-by-Side Metrics Analysis -->
+          <div
+            id="tab-panel-results"
+            role="tabpanel"
+            aria-labelledby="tab-btn-results"
+            class="tab-panel panel-body results-tab-body hidden"
+            hidden
+          >
+            <!-- Run Selector Toolbar -->
+            <div class="runs-selector-section">
+              <div class="runs-selector-header">
+                <div class="runs-selector-title-group">
+                  <h2 class="results-section-heading">Artifact Runs</h2>
+                  <span id="artifacts-folder-caption" class="runtime-meta">artifacts/</span>
+                </div>
+                <div class="runs-selector-actions">
+                  <input
+                    type="search"
+                    id="past-runs-search-input"
+                    class="runs-search-input"
+                    placeholder="Filter by run name, model, or dataset..."
+                    aria-label="Filter past runs"
+                  />
+                  <button type="button" class="btn btn-ghost" id="select-latest-run-btn">
+                    Latest
+                  </button>
+                  <button type="button" class="btn btn-ghost" id="select-all-runs-btn">
+                    Select All
+                  </button>
+                  <button type="button" class="btn btn-ghost" id="clear-runs-selection-btn">
+                    Clear
+                  </button>
+                  <button type="button" class="btn btn-secondary" id="refresh-past-runs-btn">
+                    Refresh
+                  </button>
+                </div>
+              </div>
+
+              <div id="past-runs-selector-list" class="runs-selector-grid" role="group" aria-label="Selectable benchmark runs"></div>
+              <div id="past-runs-incomplete-note" class="incomplete-runs-note hidden"></div>
+            </div>
+
+            <!-- Empty State when 0 runs have metrics or 0 selected -->
+            <div id="results-empty-state" class="results-empty-state hidden">
+              <p id="results-empty-title" class="results-empty-title">No completed runs selected</p>
+              <p id="results-empty-subtitle" class="results-empty-subtitle">
+                Select one run above for single-run latency &amp; throughput analysis, or select multiple runs to compare metrics side-by-side.
+              </p>
+            </div>
+
+            <!-- Active Analysis Workspace (Single or Multi-Run) -->
+            <div id="results-analysis-workspace" class="results-analysis-workspace hidden">
+              <div class="analysis-toolbar">
+                <div class="analysis-mode-group">
+                  <span id="analysis-mode-badge" class="analysis-mode-badge">Single-Run Analysis</span>
+                  <span id="analysis-selection-summary" class="analysis-selection-summary"></span>
+                </div>
+
+                <div class="analysis-controls-group">
+                  <label class="inline-control-label" for="comparison-stat-select">
+                    Statistic
+                    <select id="comparison-stat-select" class="compact-select">
+                      <option value="avg">Average (avg)</option>
+                      <option value="p50">Median (p50)</option>
+                      <option value="p90">p90</option>
+                      <option value="p95">p95</option>
+                      <option value="p99">p99</option>
+                      <option value="min">Minimum (min)</option>
+                      <option value="max">Maximum (max)</option>
+                    </select>
+                  </label>
+
+                  <label id="baseline-control-wrapper" class="inline-control-label hidden" for="baseline-run-select">
+                    Baseline
+                    <select id="baseline-run-select" class="compact-select"></select>
+                  </label>
+
+                  <button type="button" class="btn btn-secondary" id="export-comparison-csv-btn">
+                    Export CSV
+                  </button>
+                </div>
+              </div>
+
+              <!-- Headline KPI Summary Strip -->
+              <div id="results-kpi-strip" class="kpi-strip"></div>
+
+              <!-- Interactive SVG Graphics Suite -->
+              <div id="results-charts-grid" class="charts-grid"></div>
+
+              <!-- Side-by-Side Metrics Comparison Table -->
+              <div class="comparison-table-section">
+                <div class="comparison-table-header">
+                  <h3 id="comparison-table-title" class="results-subsection-heading">Metrics Breakdown</h3>
+                  <div id="metric-category-filters" class="category-pills" role="group" aria-label="Filter metric category">
+                    <button type="button" class="category-pill active" data-category="all">All</button>
+                    <button type="button" class="category-pill" data-category="latency">Latency</button>
+                    <button type="button" class="category-pill" data-category="throughput">Throughput</button>
+                    <button type="button" class="category-pill" data-category="tokens">Tokens</button>
+                    <button type="button" class="category-pill" data-category="requests">Requests &amp; Errors</button>
+                  </div>
+                </div>
+                <div id="comparison-table-wrapper" class="comparison-table-wrapper"></div>
+              </div>
+            </div>
+          </div>
         </section>
+
+        <!-- Floating Chart Tooltip -->
+        <div id="chart-tooltip" class="chart-tooltip hidden" role="tooltip"></div>
 
         <!-- Generated Files -->
         <section id="results-panel" class="panel hidden" aria-label="Generated Files">

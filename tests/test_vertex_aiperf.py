@@ -471,8 +471,13 @@ class TestEndToEndGoogleAccountAIPerf(unittest.TestCase):
             self.assertIn('id="token-validity-caption"', html_page)
             self.assertIn('id="tab-btn-config"', html_page)
             self.assertIn('id="tab-btn-output"', html_page)
+            self.assertIn('id="tab-btn-results"', html_page)
             self.assertIn('id="tab-panel-config"', html_page)
             self.assertIn('id="tab-panel-output"', html_page)
+            self.assertIn('id="tab-panel-results"', html_page)
+            self.assertIn('id="past-runs-selector-list"', html_page)
+            self.assertIn('id="comparison-table-wrapper"', html_page)
+            self.assertIn('id="results-charts-grid"', html_page)
             self.assertIn('id="run-name-input"', html_page)
             self.assertIn('type="password"', html_page)
             self.assertIn('id="hf-token-input"', html_page)
@@ -567,6 +572,36 @@ class TestEndToEndGoogleAccountAIPerf(unittest.TestCase):
                 self.assertIn("profile_export_aiperf.csv", zip_names)
                 self.assertIn("profile_export_aiperf.json", zip_names)
 
+            # 4b. Verify Past Runs & Metrics discovery API across both completed runs
+            art_runs_res = client.get("/api/artifact-runs")
+            self.assertEqual(art_runs_res.status_code, 200)
+            art_runs = art_runs_res.json()["runs"]
+            art_by_id = {r["run_id"]: r for r in art_runs}
+            self.assertIn("qwen3.5-bench-direct", art_by_id)
+            self.assertIn("qwen3.5-bench-proxy", art_by_id)
+            for rid in ("qwen3.5-bench-direct", "qwen3.5-bench-proxy"):
+                r_obj = art_by_id[rid]
+                self.assertTrue(r_obj["has_metrics"])
+                self.assertTrue(r_obj["has_records_jsonl"])
+                self.assertEqual(r_obj["model"], "Qwen/Qwen3.5-9B")
+                self.assertEqual(r_obj["concurrency"], 2)
+                metric_tags = {m["tag"] for m in r_obj["metrics"]}
+                self.assertIn("time_to_first_token", metric_tags)
+                self.assertIn("inter_token_latency", metric_tags)
+                self.assertIn("request_latency", metric_tags)
+                self.assertIn("output_token_throughput", metric_tags)
+
+            rec_res = client.get("/api/artifact-runs/records", params={"run_id": "qwen3.5-bench-direct"})
+            self.assertEqual(rec_res.status_code, 200)
+            rec_payload = rec_res.json()
+            self.assertTrue(rec_payload["available"])
+            self.assertGreaterEqual(rec_payload["total_records"], 4)
+            self.assertIn("request_latency", rec_payload["records"][0])
+
+            hist_zip_res = client.get("/api/artifact-runs/zip", params={"run_id": "qwen3.5-bench-direct"})
+            self.assertEqual(hist_zip_res.status_code, 200)
+            self.assertEqual(hist_zip_res.headers["content-type"], "application/zip")
+
             # 5. Verify CLI mode
             cli_out = self.root / "cli_out"
             rc = asyncio.run(
@@ -620,6 +655,73 @@ class TestEndToEndGoogleAccountAIPerf(unittest.TestCase):
                     time.sleep(0.1)
 
         self.assertEqual(captured_env.get("HF_TOKEN"), "hf_unit_test_secret_token_abc")
+
+
+class TestArtifactResultsDiscovery(unittest.TestCase):
+    """Tests discovery of incomplete folders, CSV fallback, nested sweeps, and path traversal."""
+
+    def test_incomplete_folder_csv_fallback_nested_sweep_and_security(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            # 1. Incomplete log-only directory (like an interrupted run)
+            (base / "incomplete_run" / "logs").mkdir(parents=True)
+            (base / "incomplete_run" / "logs" / "aiperf.log").write_text("started\n", encoding="utf-8")
+
+            # 2. CSV-only run directory
+            csv_dir = base / "csv_only_run"
+            csv_dir.mkdir()
+            (csv_dir / "profile_export_aiperf.csv").write_text(
+                "Metric,avg,min,max,p99,p90,p50,std\n"
+                "Time to First Token (ms),12.50,8.10,20.00,19.80,16.40,11.90,2.10\n"
+                "Inter Token Latency (ms),4.20,3.80,5.10,5.05,4.80,4.15,0.35\n"
+                "\n"
+                "Metric,Value\n"
+                "Output Token Throughput (tokens/sec),412.75\n",
+                encoding="utf-8",
+            )
+
+            # 3. Nested sweep variation directory
+            sweep_var = base / "conc_sweep" / "concurrency_10"
+            sweep_var.mkdir(parents=True)
+            (sweep_var / "profile_export_aiperf.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.4",
+                        "time_to_first_token": {"unit": "ms", "avg": 25.4, "p50": 24.0, "p90": 31.2, "p99": 38.0},
+                        "output_token_throughput": {"unit": "tokens/sec", "avg": 820.5},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            mgr = RunManager(
+                base_runs_dir=base,
+                auth_manager=GoogleAuthManager(persist_session=False),
+            )
+            with TestClient(create_app(mgr)) as client:
+                res = client.get("/api/artifact-runs")
+                self.assertEqual(res.status_code, 200)
+                runs = {r["run_id"]: r for r in res.json()["runs"]}
+
+                self.assertIn("incomplete_run", runs)
+                self.assertFalse(runs["incomplete_run"]["has_metrics"])
+
+                self.assertIn("csv_only_run", runs)
+                self.assertTrue(runs["csv_only_run"]["has_metrics"])
+                csv_tags = {m["tag"]: m for m in runs["csv_only_run"]["metrics"]}
+                self.assertIn("time_to_first_token", csv_tags)
+                self.assertAlmostEqual(csv_tags["time_to_first_token"]["stats"]["p99"], 19.8)
+                self.assertEqual(csv_tags["time_to_first_token"]["larger_is_better"], False)
+                self.assertEqual(csv_tags["output_token_throughput"]["larger_is_better"], True)
+
+                self.assertIn("conc_sweep/concurrency_10", runs)
+                self.assertTrue(runs["conc_sweep/concurrency_10"]["has_metrics"])
+
+                # Path traversal must be rejected with 404
+                trav_rec = client.get("/api/artifact-runs/records", params={"run_id": "../../etc"})
+                self.assertEqual(trav_rec.status_code, 404)
+                trav_zip = client.get("/api/artifact-runs/zip", params={"run_id": "../outside"})
+                self.assertEqual(trav_zip.status_code, 404)
 
 
 if __name__ == "__main__":

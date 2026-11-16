@@ -31,7 +31,12 @@ Lightweight Web & CLI wrapper for running **NVIDIA AIPerf** (`aiperf`) LLM perfo
 - **Two Credential Transport Modes**:
   - **Direct Bearer Mode (default, 0-hop)**: Injects your Google OAuth2 Bearer token directly into AIPerf in memory (never exposed in `ps aux` or exported JSON artifacts).
   - **Auto-Refresh Proxy Mode (`>55m` runs)**: Routes traffic through a local `127.0.0.1` streaming reverse proxy (`aiohttp`) that forwards SSE chunks unbuffered while automatically renewing your 60-minute OAuth2 token via `refresh_token`.
-- **Verbatim AIPerf Output & Generated Files Export**: Streams `aiperf`'s exact ASCII/Unicode console output and formatted layout live over SSE, lists all generated files, and provides one-click download of all generated artifacts in a single `.zip` archive.
+- **Verbatim AIPerf Output & Generated Files Export**:
+  - Dedicated **AIPerf Output** tab streaming `aiperf`'s exact ASCII/Unicode console output and formatted layout live over SSE, listing all generated files, and providing one-click download of all generated artifacts in a single `.zip` archive.
+- **Past Runs & Side-by-Side Metrics Analysis (`artifacts/`)**:
+  - Dedicated **Past Runs & Metrics** tab that automatically discovers historical runs inside `artifacts/` (parsing `profile_export_aiperf.json`, `profile_export_aiperf.csv` fallback, nested sweep folders, and per-request `profile_export.jsonl` traces, while flagging cancelled/incomplete log-only runs).
+  - **Single-Run Analysis**: Select one run to inspect KPI tiles, an interactive SVG **Latency Percentile Spread** (`p25–p75` IQR, `p50` median, `avg`, `p90`/`p99` tail markers), **Prefill (`TTFT`) vs. Decode Time Composition**, **Per-Request Latency Histograms & Token-Length Scaling Scatter Plots**, and a full statistical table (`avg`, `p50`, `p90`, `p95`, `p99`, `min`, `max`, `std`).
+  - **Multi-Run Comparison**: Select two or more runs to compare metrics side-by-side at any statistic (`avg`, `p50`, `p90`, `p95`, `p99`, `min`, `max`) with **Grouped Latency & Throughput Bar Charts**, **Tail-Latency Percentile Curves (`p10` → `p99`)**, a **Throughput vs. Latency Pareto Frontier** plot, configurable **Baseline** `% Δ` improvement/regression badges, category filters, per-run `.zip` downloads, and one-click **Export CSV**.
 
 ## Quick Start
 
@@ -61,7 +66,8 @@ GOOGLE_OAUTH_CLIENT_SECRET=your-oauth-client-secret
 
 Open **http://localhost:8080** in your browser:
 1. Click **Sign in with Google** (and optionally **Verify Token**).
-2. Enter your `aiperf profile ...` command (replacing `YOUR-PROJECT-NUMBER` and `YOUR-ENDPOINT-ID` with your deployed Vertex AI endpoint) and click **Run AIPerf Benchmark**.
+2. In the **Configuration** tab, enter your `aiperf profile ...` command (replacing `YOUR-PROJECT-NUMBER` and `YOUR-ENDPOINT-ID` with your deployed Vertex AI endpoint) and click **Run AIPerf Benchmark** to stream live output in the **AIPerf Output** tab.
+3. Open the **Past Runs & Metrics** tab to analyze a single run or select multiple runs from `artifacts/` for side-by-side comparison, interactive latency/throughput/Pareto charts, and CSV export.
 
 ### 3. Run via Terminal CLI Wrapper (Optional)
 

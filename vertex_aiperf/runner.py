@@ -155,6 +155,10 @@ class RunManager:
         self._active_run_id: str | None = None
         self._lock = asyncio.Lock()
 
+    @property
+    def base_runs_dir(self) -> Path:
+        return self._base_runs_dir
+
     def get_job(self, run_id: str) -> BenchmarkJob | None:
         return self._jobs.get(run_id)
 

@@ -24,7 +24,12 @@ from vertex_aiperf.command_parser import (
     CommandParseError,
     parse_and_validate_aiperf_command,
 )
-from vertex_aiperf.runner import RunManager
+from vertex_aiperf.results import (
+    list_artifact_runs,
+    load_run_request_records,
+    resolve_artifact_run_dir,
+)
+from vertex_aiperf.runner import RunManager, sanitize_run_name
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -430,6 +435,55 @@ def create_app(run_manager: RunManager | None = None) -> FastAPI:
         return FileResponse(
             target,
             filename=target.name,
+        )
+
+    @app.get("/api/artifact-runs")
+    async def api_list_artifact_runs() -> dict[str, Any]:
+        runs = await asyncio.to_thread(list_artifact_runs, manager.base_runs_dir)
+        return {
+            "artifacts_dir": str(manager.base_runs_dir),
+            "runs": runs,
+        }
+
+    @app.get("/api/artifact-runs/records")
+    async def api_artifact_run_records(
+        run_id: str = Query(..., description="Relative run folder name inside artifacts/"),
+    ) -> dict[str, Any]:
+        try:
+            return await asyncio.to_thread(
+                load_run_request_records,
+                manager.base_runs_dir,
+                run_id,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/artifact-runs/zip")
+    async def api_download_artifact_run_zip(
+        run_id: str = Query(..., description="Relative run folder name inside artifacts/"),
+    ) -> Response:
+        try:
+            run_dir = resolve_artifact_run_dir(manager.base_runs_dir, run_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        def _build_archive() -> bytes:
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+                for file_path in sorted(run_dir.rglob("*")):
+                    if file_path.is_file() and not file_path.is_symlink():
+                        arcname = file_path.relative_to(run_dir).as_posix()
+                        zf.write(file_path, arcname=arcname)
+            return buf.getvalue()
+
+        zip_bytes = await asyncio.to_thread(_build_archive)
+        safe_base = sanitize_run_name(run_id.replace("/", "_")) or "artifacts"
+        return Response(
+            content=zip_bytes,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{safe_base}.zip"',
+            },
         )
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
