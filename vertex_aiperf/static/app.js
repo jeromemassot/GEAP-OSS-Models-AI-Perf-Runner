@@ -537,6 +537,29 @@ function syncTerminalBuffer() {
   }
 }
 
+function syncHistoryTileWithJob(job) {
+  if (!job || !job.run_id || !els.historyList) return;
+  const status = job.status || "idle";
+  let matched = false;
+
+  els.historyList.querySelectorAll(".history-item").forEach((btn) => {
+    const isThisJob = btn.dataset.runId === job.run_id;
+    btn.classList.toggle("active", btn.dataset.runId === activeRunId);
+    if (isThisJob) {
+      matched = true;
+      const badge = btn.querySelector(".status-badge");
+      if (badge) {
+        badge.className = `status-badge ${status}`;
+        badge.textContent = status;
+      }
+    }
+  });
+
+  if (!matched) {
+    refreshHistory();
+  }
+}
+
 function updateStatusUI(job) {
   const status = job.status || "idle";
   els.statusBadge.className = `status-badge ${status}`;
@@ -551,6 +574,8 @@ function updateStatusUI(job) {
   els.startRunBtn.disabled = isActive;
   els.stopRunBtn.classList.toggle("hidden", !isActive);
   els.stopRunOutputBtn.classList.toggle("hidden", !isActive);
+
+  syncHistoryTileWithJob(job);
 
   if (!isActive) {
     stopElapsedClock();
@@ -692,11 +717,12 @@ async function startBenchmark() {
       throw new Error(data.detail || "Failed to start benchmark run.");
     }
 
+    activeRunId = data.run_id;
     refreshAuthStatus();
+    updateStatusUI(data.job);
     switchTab("output");
     startElapsedClock(data.job.created_at);
     connectStream(data.run_id);
-    refreshHistory();
   } catch (err) {
     els.startRunBtn.disabled = false;
     els.errorBanner.textContent = err.message;
@@ -741,11 +767,15 @@ async function loadRunDetails(runId, switchToOutput = true) {
   }
 }
 
+let historyRefreshSeq = 0;
+
 async function refreshHistory() {
+  const seq = ++historyRefreshSeq;
   try {
     const resp = await fetch("/api/runs");
-    if (!resp.ok) return;
+    if (!resp.ok || seq !== historyRefreshSeq) return;
     const { runs } = await resp.json();
+    if (seq !== historyRefreshSeq) return;
     if (!runs || runs.length === 0) {
       els.historyPanel.classList.add("hidden");
       return;
@@ -768,6 +798,15 @@ async function refreshHistory() {
     els.historyList.querySelectorAll(".history-item").forEach((btn) => {
       btn.addEventListener("click", () => loadRunDetails(btn.dataset.runId, true));
     });
+
+    // Keep the tab title status badge in sync with the active run's authoritative server state
+    if (activeRunId) {
+      const activeEntry = runs.find((r) => r.run_id === activeRunId);
+      if (activeEntry && activeEntry.status) {
+        els.statusBadge.className = `status-badge ${activeEntry.status}`;
+        els.statusBadge.textContent = activeEntry.status;
+      }
+    }
   } catch {
     // Ignore
   }
